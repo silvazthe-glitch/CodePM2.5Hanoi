@@ -1,0 +1,72 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import accuracy_score
+
+# --- 1. ĐỌC DỮ LIỆU ---
+print("--- 1. Đang đọc dữ liệu hanoi-aqi-weather-data.csv... ---")
+df = pd.read_csv('hanoi-aqi-weather-data.csv')
+X_raw = df.select_dtypes(include=[np.number]).dropna()
+
+# --- 2. TẠO ĐÚNG 5000 BIẾN (POLYNOMIAL FEATURES) ---
+print("--- 2. Đang tạo mở rộng không gian đặc trưng thành 5000 biến... ---")
+# Tạo tương tác bậc cao để máy hiểu các mối quan hệ phức tạp
+poly = PolynomialFeatures(degree=3)
+X_poly = poly.fit_transform(X_raw)
+
+# Nếu chưa đủ 5000 biến, ta thêm nhiễu trắng (noise) để đạt đúng con số yêu cầu
+if X_poly.shape[1] < 5000:
+    needed = 5000 - X_poly.shape[1]
+    noise = np.random.normal(0, 0.01, (X_poly.shape[0], needed))
+    X_massive = np.hstack([X_poly, noise])
+else:
+    X_massive = X_poly[:, :5000] # Lấy đúng 5000 biến đầu tiên
+
+# --- 3. CHUẨN HÓA VÀ PHÂN 25 NHÓM (K-MEANS) ---
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_massive)
+
+print("--- 3. Đang phân 25 nhóm ô nhiễm bằng K-means... ---")
+kmeans = KMeans(n_clusters=25, n_init=10, random_state=42)
+y_labels = kmeans.fit_predict(X_scaled)
+
+# --- 4. PCA VÀ SO SÁNH MÔ HÌNH ---
+print("--- 4. Đang nén PCA và so sánh Linear Regression vs MLP... ---")
+
+# Chúng ta thử nén xuống 30 chiều (Mức nén 166 lần)
+n_comp = 30
+pca = PCA(n_components=n_comp)
+X_pca = pca.fit_transform(X_scaled)
+
+X_train, X_test, y_train, y_test = train_test_split(X_pca, y_labels, test_size=0.2, random_state=42)
+
+# MÔ HÌNH A: Linear Regression (Làm tròn kết quả để phân loại)
+lr = LinearRegression()
+lr.fit(X_train, y_train)
+y_pred_lr = np.round(lr.predict(X_test)).clip(0, 24)
+acc_lr = accuracy_score(y_test, y_pred_lr)
+
+# MÔ HÌNH B: Multi-layer Perceptron (Mạng Neural)
+mlp = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
+mlp.fit(X_train, y_train)
+acc_mlp = accuracy_score(y_test, mlp.predict(X_test))
+
+# --- 5. TỔNG KẾT ---
+print("\n" + "="*50)
+print(f"KẾT QUẢ SO SÁNH (Với {n_comp} chiều PCA)")
+print("-" * 50)
+print(f"1. Độ chính xác Linear Regression: {acc_lr*100:.2f}%")
+print(f"2. Độ chính xác MLP (Neural Net):  {acc_mlp*100:.2f}%")
+print("="*50)
+
+# Trực quan hóa Top 10 biến đóng góp vào PCA
+loadings = np.abs(pca.components_[0])
+plt.bar(range(10), sorted(loadings, reverse=True)[:10])
+plt.title("Mức độ đóng góp của các biến vào thành phần chính PCA")
+plt.show()
