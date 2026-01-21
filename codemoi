@@ -1,0 +1,123 @@
+import pandas as pd
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
+
+# --- CẤU HÌNH ---
+FILE_PATH = 'hanoi-aqi-weather-data.csv'
+
+# Cài đặt hiển thị
+sns.set(style="whitegrid")
+plt.rcParams['figure.figsize'] = (14, 8)
+
+
+# --- MODULE TÍNH TOÁN AQI (Dựa trên nồng độ PM2.5) ---
+def calc_aqi_pm25(pm25):
+    """
+    Tính chỉ số AQI dựa trên nồng độ PM2.5 (µg/m³) theo công thức chuẩn EPA.
+    """
+    if pd.isna(pm25): return 0
+    c = float(pm25)
+
+    if c <= 12.0:
+        return ((50 - 0) / (12.0 - 0)) * (c - 0) + 0
+    elif c <= 35.4:
+        return ((100 - 51) / (35.4 - 12.1)) * (c - 12.1) + 51
+    elif c <= 55.4:
+        return ((150 - 101) / (55.4 - 35.5)) * (c - 35.5) + 101
+    elif c <= 150.4:
+        return ((200 - 151) / (150.4 - 55.5)) * (c - 55.5) + 151
+    elif c <= 250.4:
+        return ((300 - 201) / (250.4 - 150.5)) * (c - 150.5) + 201
+    elif c <= 350.4:
+        return ((400 - 301) / (350.4 - 250.5)) * (c - 250.5) + 301
+    else:
+        return ((500 - 401) / (500.4 - 350.5)) * (c - 350.5) + 401
+
+
+def phan_loai_aqi_vn(aqi):
+    """Phân loại nhãn AQI cho mô hình học máy"""
+    if aqi <= 50:
+        return 0
+    elif aqi <= 100:
+        return 1
+    elif aqi <= 150:
+        return 2
+    elif aqi <= 200:
+        return 3
+    else:
+        return 4
+
+
+def run_analysis():
+    print("--- 1. ĐỌC DỮ LIỆU & TÍNH TOÁN AQI ---")
+    if not os.path.exists(FILE_PATH):
+        print(f"❌ LỖI: Không tìm thấy file '{FILE_PATH}'!")
+        return
+
+    df = pd.read_csv(FILE_PATH)
+    df.columns = [c.lower().replace('.', '').strip() for c in df.columns]
+
+    if 'pm25' not in df.columns:
+        print("❌ LỖI: Dataset không có cột 'pm25' để tính AQI.")
+        return
+
+    print(">>> Đang tính toán chỉ số AQI từ nồng độ bụi PM2.5...")
+    df['calculated_aqi'] = df['pm25'].apply(calc_aqi_pm25)
+
+    # Tạo biến mục tiêu (Target) và biến đầu vào (X)
+    y = df['calculated_aqi'].apply(phan_loai_aqi_vn)
+    X_raw = df.select_dtypes(include=[np.number])
+
+    # Loại bỏ cột AQI vừa tính ra khỏi đầu vào X để tránh data leakage
+    if 'calculated_aqi' in X_raw.columns:
+        X = X_raw.drop(columns=['calculated_aqi'])
+    else:
+        X = X_raw
+
+    feature_names = X.columns.tolist()
+    print(f"✅ Dữ liệu sẵn sàng: {X.shape[0]} dòng, {X.shape[1]} biến.")
+
+    # --- 2. HUẤN LUYỆN MÔ HÌNH ---
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+    print("--- 2. ĐANG CHẠY LOGISTIC REGRESSION ĐỂ TÌM TRỌNG SỐ ---")
+    model = LogisticRegression(solver='lbfgs', max_iter=5000)
+    model.fit(X_train, y_train)
+
+    acc = accuracy_score(y_test, model.predict(X_test))
+    print(f"\n📊 ĐỘ CHÍNH XÁC MÔ HÌNH: {acc * 100:.2f}%")
+
+    # --- 3. PHÂN TÍCH & VẼ BIỂU ĐỒ ---
+    importance = np.mean(np.abs(model.coef_), axis=0)
+    feat_imp = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
+    feat_imp = feat_imp.sort_values(by='Importance', ascending=False)
+
+    plt.figure(figsize=(12, 7))
+
+    colors = ['#9b59b6' if i == 0 else '#27ae60' for i in range(len(feat_imp))]
+
+    # Vẽ biểu đồ (Đã sửa lỗi Future Warning của Seaborn)
+    sns.barplot(x='Importance', y='Feature', data=feat_imp, hue='Feature', palette=colors, legend=False)
+
+    plt.title('PHÂN TÍCH TÁC ĐỘNG: YẾU TỐ NÀO CẤU THÀNH NÊN Ô NHIỄM (AQI)?', fontsize=16, fontweight='bold')
+    plt.xlabel('Trọng số ảnh hưởng (Feature Importance)', fontsize=12)
+    plt.ylabel('Các chỉ số môi trường', fontsize=12)
+
+    # Hiển thị giá trị lên từng thanh
+    for index, value in enumerate(feat_imp['Importance']):
+        plt.text(value, index, f' {value:.2f}', va='center', fontweight='bold')
+
+    plt.tight_layout()
+    plt.show()
+
+
+if __name__ == "__main__":
+    run_analysis()
