@@ -1,0 +1,137 @@
+import pandas as pd
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Import 4 thuật toán
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
+
+# --- CẤU HÌNH ---
+FILE_PATH = 'hanoi-aqi-weather-data.csv'
+sns.set(style="whitegrid")
+plt.rcParams['figure.figsize'] = (14, 8)
+
+
+# --- CÁC HÀM XỬ LÝ ---
+def calc_aqi_pm25(pm25):
+    """Tính AQI từ PM2.5 (Chuẩn EPA)"""
+    if pd.isna(pm25): return 0
+    c = float(pm25)
+    if c <= 12.0:
+        return ((50 - 0) / (12.0 - 0)) * (c - 0) + 0
+    elif c <= 35.4:
+        return ((100 - 51) / (35.4 - 12.1)) * (c - 12.1) + 51
+    elif c <= 55.4:
+        return ((150 - 101) / (55.4 - 35.5)) * (c - 35.5) + 101
+    elif c <= 150.4:
+        return ((200 - 151) / (150.4 - 55.5)) * (c - 55.5) + 151
+    elif c <= 250.4:
+        return ((300 - 201) / (250.4 - 150.5)) * (c - 150.5) + 201
+    elif c <= 350.4:
+        return ((400 - 301) / (350.4 - 250.5)) * (c - 250.5) + 301
+    else:
+        return ((500 - 401) / (500.4 - 350.5)) * (c - 350.5) + 401
+
+
+def phan_loai_aqi(aqi):
+    """Phân loại mức độ: 0:Tốt, 1:TB, 2:Kém, 3:Xấu, 4:Nguy hại"""
+    if aqi <= 50:
+        return 0
+    elif aqi <= 100:
+        return 1
+    elif aqi <= 150:
+        return 2
+    elif aqi <= 200:
+        return 3
+    else:
+        return 4
+
+
+def run_multi_model_analysis():
+    print("--- 1. CHUẨN BỊ DỮ LIỆU ---")
+    if not os.path.exists(FILE_PATH):
+        print(f"❌ Không tìm thấy file {FILE_PATH}")
+        return
+
+    df = pd.read_csv(FILE_PATH)
+    df.columns = [c.lower().replace('.', '').strip() for c in df.columns]
+
+    # Tính toán Target
+    df['aqi_val'] = df['pm25'].apply(calc_aqi_pm25)
+
+    # Biến mục tiêu phân loại (Class): Dùng cho Tree, Forest, Boosting
+    y_class = df['aqi_val'].apply(phan_loai_aqi)
+
+    # Biến mục tiêu hồi quy (Regression): Dùng cho Linear Regression
+    y_reg = df['aqi_val']
+
+    # Input X
+    X = df.select_dtypes(include=[np.number]).drop(columns=['aqi_val'])
+
+    # Chia tập train/test
+    X_train, X_test, y_cls_train, y_cls_test = train_test_split(X, y_class, test_size=0.2, random_state=42)
+    _, _, y_reg_train, y_reg_test = train_test_split(X, y_reg, test_size=0.2, random_state=42)
+
+    # Chuẩn hóa dữ liệu (Tốt cho Linear Regression)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    results = {}
+
+    print("--- 2. HUẤN LUYỆN 4 MÔ HÌNH ---")
+
+    # MODEL 1: LINEAR REGRESSION (Hồi quy tuyến tính)
+    # Cách làm: Dự đoán ra số AQI, sau đó quy đổi số đó ra nhãn để so sánh
+    lin_reg = LinearRegression()
+    lin_reg.fit(X_train_scaled, y_reg_train)
+    y_pred_lin_val = lin_reg.predict(X_test_scaled)
+    y_pred_lin_cls = [phan_loai_aqi(val) for val in y_pred_lin_val]
+    results['Linear Regression'] = accuracy_score(y_cls_test, y_pred_lin_cls)
+
+    # MODEL 2: DECISION TREE (Cây quyết định)
+    dt_model = DecisionTreeClassifier(random_state=42)
+    dt_model.fit(X_train, y_cls_train)  # Tree không cần scale dữ liệu cũng chạy tốt
+    results['Decision Tree'] = accuracy_score(y_cls_test, dt_model.predict(X_test))
+
+    # MODEL 3: RANDOM FOREST (Rừng ngẫu nhiên)
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf_model.fit(X_train, y_cls_train)
+    results['Random Forest'] = accuracy_score(y_cls_test, rf_model.predict(X_test))
+
+    # MODEL 4: GRADIENT BOOSTING (Thuật toán tăng cường)
+    gb_model = GradientBoostingClassifier(random_state=42)
+    gb_model.fit(X_train, y_cls_train)
+    results['Gradient Boosting'] = accuracy_score(y_cls_test, gb_model.predict(X_test))
+
+    # --- 3. VẼ BIỂU ĐỒ SO SÁNH ---
+    print("\n📊 KẾT QUẢ ĐỘ CHÍNH XÁC:")
+    for name, acc in results.items():
+        print(f"   ► {name}: {acc * 100:.2f}%")
+
+    # Tạo DataFrame để vẽ
+    res_df = pd.DataFrame(list(results.items()), columns=['Model', 'Accuracy'])
+    res_df = res_df.sort_values(by='Accuracy', ascending=False)
+
+    plt.figure(figsize=(10, 6))
+    colors = ['#2ecc71', '#3498db', '#9b59b6', '#e74c3c']  # Xanh lá, Xanh dương, Tím, Đỏ
+    sns.barplot(x='Accuracy', y='Model', data=res_df, palette=colors, hue='Model', legend=False)
+    plt.title('SO SÁNH HIỆU QUẢ 4 THUẬT TOÁN DỰ BÁO Ô NHIỄM', fontsize=15, fontweight='bold')
+    plt.xlabel('Độ chính xác (Accuracy)', fontsize=12)
+    plt.xlim(0, 1.1)  # Để chừa chỗ cho text
+
+    for index, value in enumerate(res_df['Accuracy']):
+        plt.text(value, index, f' {value * 100:.2f}%', va='center', fontweight='bold', fontsize=12)
+
+    plt.tight_layout()
+    plt.show()
+
+
+if __name__ == "__main__":
+    run_multi_model_analysis()
